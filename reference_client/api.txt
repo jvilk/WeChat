@@ -1,0 +1,94 @@
+What the reference client is for:
+---------------------------------
+
+The reference client implements the basic WeChat protocol, in order to help you implement the minimal interoperability requirements for your server.  Messages intended to control the distributed application, which we refer to as Y'allChat, are a superset of the WeChat protocol and are not implemented in our reference application.  Design and implementation of Y'allChat is left up to each group.
+
+WeChat polls the server for new data.  If you want to do fancy stuff like have one client thread 'block' on input (client listens on a socket for new data from server in net I/O thread), do it in Y'allChat.
+
+wechat requires the argparse library, which comes with some prebuilt Python binaries.  If you don't have it, you can install it manually like so:
+
+easy_install argparse
+
+Invocation:
+-----------
+
+./wechat [username] [url]
+
+Example:
+
+./wechat ringo my.chat.server/chats/tentacle_porn
+
+If you supply an optional sequence number, you receive the backlog of chat messages between sequence_num and cur_num, e.g.,
+
+./wechat ringo my.chat.server/chats/tentacle_porn/83
+
+Commands:
+---------
+
+Directory joinChat:
+PUT http://machine:8000/chats/[channel]/join/[username]
+
+bool leaveChat: 
+PUT http://machine:8000/chats/[channel]/leave/
+
+Event getEventForChat:
+GET http://machine:8000/chats/[channel]/events
+
+Directory getDirectoryForChat:
+GET http://machine:8000/chats/[channel]/directory
+
+bool putMessageForChat:
+PUT http://machine:8000/chats/[channel]/messages
+
+Objects:
+--------
+
+Message::Event
+  [header field] seqnr: <int> // the server ignores this if originating from client
+  [header field] type: MSG
+  [header field] source: <username>
+  [body]: message contents
+  
+Directory::Event
+  [header field] type: DIR
+  [body]:
+    <username>
+    <username>
+    ...
+    
+Behavior:
+---------
+
+All message body data originating from the server is JSON-encoded.
+
+When a client wants to join a "chat", it issues a HTTP PUT connection to the appropriate chat channel URL, e.g., http://machine:8000/chats/4/join/ringo, and the server returns a session key ("session") in the HTTP header with HTTP status code 200. If joining failed, which can only happen if that particular username is already taken, the server sets status code 409.
+
+NOTE: For all subsequent communication, the client must set the "session" header with the session key.
+
+The client SHOULD first issue a getDirectoryForChat message, which is a comma-separated list of usernames.
+
+Next, the client issues a getEventForChat message.  This call either Message objects or updated Directory objects.
+
+When a client wants to broadcast a message, it issues a putMessageForChat call where msg is a Message object.
+
+If a client wants to start a new chat conversation, it simply connects to the server with a new channel name.  The server may refuse to create the new channel, in which case, it returns the word "false" to the client in the message body.
+
+The server may remove a user from a chat at any time, thus removing the user from the directory.  Typically a server may do this if it has not communicated with a client after some specified timeout.
+
+For the reference client, the message ordering is ensured by the server.  The client should assume that this ordering is correct.
+
+State Required on Server
+------------------------
+
+The server MUST pair each username with a session key, and issue this session key to the client.  After joining, the server MUST check that only the client that offers the correct key may operate as that username.
+
+The server MAY keep the entire chat history, but it only must store the last 1000 messages for each chat channel.  If a client asks for messages starting from a sequence number to HEAD, if the server has the message history, it will be sent to the client, otherwise it MAY be truncated.
+
+The server MUST maintain a directory for each chat, which is the list of the usernames for each chat.
+
+Sample Coolness:
+----------------
+
+The client can function as a bridge between two different Y'allChat implementations like so:
+
+./wechat.py -b [ip1] [ip2]
