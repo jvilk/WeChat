@@ -1,94 +1,132 @@
 What the reference client is for:
 ---------------------------------
 
-The reference client implements the basic WeChat protocol, in order to help you implement the minimal interoperability requirements for your server.  Messages intended to control the distributed application, which we refer to as Y'allChat, are a superset of the WeChat protocol and are not implemented in our reference application.  Design and implementation of Y'allChat is left up to each group.
+The reference client implements the basic WeChat protocol, in order to help you implement the minimal interoperability requirements for your server.  Messages intended to control the distributed application, which we refer to as Y'allChat, are a superset of the WeChat protocol and are not implemented in our reference application.  Design and implementation of Y'allChat is left up to each group.  Projects written in Python will not be accepted, so reusing code from this project will not help you.
 
 WeChat polls the server for new data.  If you want to do fancy stuff like have one client thread 'block' on input (client listens on a socket for new data from server in net I/O thread), do it in Y'allChat.
 
-wechat requires the argparse library, which comes with some prebuilt Python binaries.  If you don't have it, you can install it manually like so:
+WeChat runs on port 8000 by default.
+
+WeChat requires the Python argparse library, which comes with some prebuilt Python binaries.  If you don't have it, you can install it manually like so:
 
 easy_install argparse
+
+WeChat was written for Python 2.7.
 
 Invocation:
 -----------
 
-./wechat [username] [url]
+./wechat [username] [server] [channel]
 
 Example:
 
-./wechat ringo my.chat.server/chats/tentacle_porn
-
-If you supply an optional sequence number, you receive the backlog of chat messages between sequence_num and cur_num, e.g.,
-
-./wechat ringo my.chat.server/chats/tentacle_porn/83
+./wechat kermit my.chat.server bacon_porn
 
 Commands:
 ---------
 
-Directory joinChat:
-PUT http://machine:8000/chats/[channel]/join/[username]
+Your client must be able to handle the following HTTP codes in response to any message:
 
-bool leaveChat: 
-PUT http://machine:8000/chats/[channel]/leave/
+301 -> Redirect
+  [response body] <server address>
 
-Event getEventForChat:
-GET http://machine:8000/chats/[channel]/events
+400 -> Invalid Command
 
-Directory getDirectoryForChat:
-GET http://machine:8000/chats/[channel]/directory
+401 -> Unauthorized
 
-bool putMessageForChat:
-PUT http://machine:8000/chats/[channel]/messages
+Get server version:
+  GET http://machine:8000
 
-Objects:
+  200 -> OK
+    [response header field] version: <comma-separated list of versions>
+      
+Create channel:
+  PUT http://machine:8000/channels/[channel]/create/[username]
+
+  200 -> OK
+    [response header field] session: <session key>
+    [response header field] sequence: <sequence number>
+    [response header field] version: <version id>
+  401 -> CONFLICT (channel already exists)
+      
+Join channel:
+  PUT http://machine:8000/channels/[channel]/join/[username]
+
+  200 -> OK
+    [response header field] session: <session key>
+    [response header field] sequence: <sequence number>
+    [response header field] version: <version id>
+  404 -> NOT FOUND (channel does not exist)
+  409 -> CONFLICT (username already in channel)
+
+Leave channel:
+  PUT http://machine:8000/channels/[channel]/leave
+    [request header field] session: <session key>
+    
+  200 -> OK
+  401 -> UNAUTHORIZED (user not in channel)
+    
+Post a message:
+  PUT http://machine:8000/channels/[channel]/messages
+    [request header field] session: <session key>
+    [request body] <message>
+    
+  200 -> OK
+  401 -> UNAUTHORIZED (user not in channel)
+  
+Fetch the most recent user list:
+  GET http://machine:8000/channels/[channel]/directory
+    [request header field] session: <session key>
+    
+  200 -> OK
+    [request body] <message>
+  401 -> UNAUTHORIZED
+  
+Ask the server for an event:
+  GET http://machine:8000/channels/[channel]/events
+    [request header field] session: <session key>
+    [request header field] sequence: <sequence number>
+    
+  200 -> OK
+    [HTTP response depends on type of event; see Event Objects below]
+  401 -> UNAUTHORIZED
+  404 -> NOT FOUND (no more events to fetch)
+
+Event Objects:
 --------
 
 Message::Event
-  [header field] seqnr: <int> // the server ignores this if originating from client
+  [header field] sequence: <sequence number>
   [header field] type: MSG
   [header field] source: <username>
-  [body]: message contents
+  [body] message contents
   
 Directory::Event
   [header field] type: DIR
-  [body]:
-    <username>
-    <username>
-    ...
+  [body] <username_1>,<username_2>,...,<username_n>
     
 Behavior:
 ---------
 
-All message body data originating from the server is JSON-encoded.
-
-When a client wants to join a "chat", it issues a HTTP PUT connection to the appropriate chat channel URL, e.g., http://machine:8000/chats/4/join/ringo, and the server returns a session key ("session") in the HTTP header with HTTP status code 200. If joining failed, which can only happen if that particular username is already taken, the server sets status code 409.
+When a client wants to join a channel, it issues a HTTP PUT connection to the appropriate chat channel URL, e.g., http://server/channels/bacon_porn/join/kermit.  If joining is successful, the server returns a session id token.
 
 NOTE: For all subsequent communication, the client must set the "session" header with the session key.
 
-The client SHOULD first issue a getDirectoryForChat message, which is a comma-separated list of usernames.
+The client may issue a directory request at any time once they are connected to a channel.  The client should probably explicitly request a new user directory immediately after connecting.
 
-Next, the client issues a getEventForChat message.  This call either Message objects or updated Directory objects.
+Putting and getting messages consists of issuing PUT requests to the message URL and GETting messages back out from the events URL.  The client must expect that the event returned is either a Directory object (which is a complete list of all users in the channel) or an Event object.
 
-When a client wants to broadcast a message, it issues a putMessageForChat call where msg is a Message object.
+If a client wants to start a new chat conversation, it must issue a PUT request to the new channel path.  The client is automatically joined to the chat, and communication should proceed as if the client issued a regular channel join request.  The server may refuse to create the new channel if a channel with that name already exists.
 
-If a client wants to start a new chat conversation, it simply connects to the server with a new channel name.  The server may refuse to create the new channel, in which case, it returns the word "false" to the client in the message body.
-
-The server may remove a user from a chat at any time, thus removing the user from the directory.  Typically a server may do this if it has not communicated with a client after some specified timeout.
+The server may remove a user from a chat at any time, thus removing the user from the directory.  E.g., the server will do this if it has not communicated with a client after some specified timeout.  If a client finds that it has been disconnected from the server, it should expect to have to rejoin.
 
 For the reference client, the message ordering is ensured by the server.  The client should assume that this ordering is correct.
 
 State Required on Server
 ------------------------
 
-The server MUST pair each username with a session key, and issue this session key to the client.  After joining, the server MUST check that only the client that offers the correct key may operate as that username.
+The server MUST pair each (version, username, channel) with a session key, and issue this session key to the client.  After joining, the server MUST check that only the client that offers the correct key may operate as that username.  A server MAY do additional checks (e.g., the IP also matches) but these are not strictly required.
 
 The server MAY keep the entire chat history, but it only must store the last 1000 messages for each chat channel.  If a client asks for messages starting from a sequence number to HEAD, if the server has the message history, it will be sent to the client, otherwise it MAY be truncated.
 
 The server MUST maintain a directory for each chat, which is the list of the usernames for each chat.
-
-Sample Coolness:
-----------------
-
-The client can function as a bridge between two different Y'allChat implementations like so:
-
-./wechat.py -b [ip1] [ip2]

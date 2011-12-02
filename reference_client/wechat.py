@@ -9,14 +9,16 @@ class ChatError(Exception):
 
 def setup_parser():
 	parser = argparse.ArgumentParser(description='Like "wall", but better.')
-	parser.add_argument('username', help="Your username")
-	parser.add_argument('url', help="The URL for the chat")
+	parser.add_argument('username', help="Your username.")
+	parser.add_argument('server', help="The server name for the chat.")
+	parser.add_argument('channel', help="The channel name for the chat.")
 	return parser
 
 def process_args(parser):
 	args = parser.parse_args()
 	username = args.username
-	(server, sep, url) = args.url.partition('/')
+	server = args.server
+	url = "channels/" + args.channel
 	return (username, server, url)
 	
 def sigint_handler(signal, frame):
@@ -30,7 +32,6 @@ def leavechat(type):
 	h = httplib.HTTPConnection(server, port)
 	h.request('PUT', url + "/leave/" + username, "", {'session': session_key})
 	sys.exit(type)
-	# return process_data(h.getresponse())
 
 class NetworkTalker(threading.Thread):
 	def __init__(self, termq, netq, username, server, url, port):
@@ -43,7 +44,6 @@ class NetworkTalker(threading.Thread):
 		self.url = url
 		self.port = port
 		self.pollint = 1
-		# self.session_key = ""
 		self.seqnr = 0
 			
 	def run(self):
@@ -55,7 +55,6 @@ class NetworkTalker(threading.Thread):
 					self.putmsg(event['data'])
 			except Queue.Empty:
 				try:
-					# print "DEBUG: Checking for events"
 					r = self.getevt()
 					if r['headers']['type'] == 'DIR':
 						self.termq.put(r['headers']['sequence'] + ": New directory: " + "> " + r['body'] + "\n")
